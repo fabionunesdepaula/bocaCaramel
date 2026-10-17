@@ -7,7 +7,7 @@ datasources:
     database: bocadb
     user: bocauser
     secureJsonData:
-      password: dAm0HAiC
+      password: $BOCA_DB_PASSWORD
     jsonData:
       sslmode: disable
       maxOpenConns: 5

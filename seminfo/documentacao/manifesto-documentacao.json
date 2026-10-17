@@ -1,0 +1,26 @@
+{
+  "edition": "2026-10-16",
+  "event": "2026-10-29",
+  "interface": "mantida; prévia descartada excluída",
+  "contains_real_credentials": false,
+  "files": [
+    {
+      "file": "output\\pdf\\manual-if.pdf",
+      "source": "manual-if.md",
+      "source_sha256": "e668359040297a430be78a977b107aa9a672cb1ba2a9d9ed0ea9a6208c5357fd",
+      "pdf_sha256": "04de1cbf284f662f7f13f83ed8d8530ec92015533ee361c27a90c41475c8459a"
+    },
+    {
+      "file": "output\\pdf\\roteiro-banca.pdf",
+      "source": "roteiro-banca.md",
+      "source_sha256": "180fa7a6a55cdd082681acf3508f144a271707d97a58d9dffa988b4609959900",
+      "pdf_sha256": "d92844aa123a15cb68b3c1639919b4354e931e7ac2d667818a4b50b398625dd1"
+    },
+    {
+      "file": "output\\pdf\\ficha-homologacao.pdf",
+      "source": "ficha-homologacao.md",
+      "source_sha256": "bec13fc08c087e94c19e0b24f7ec90e0f891634510a96962a4968ac9b8278f42",
+      "pdf_sha256": "e259ce123bd60b7ffaa1e96683717aa2d867e810d3c2c25cae2b2d5951bdc538"
+    }
+  ]
+}

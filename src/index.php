@@ -32,6 +32,14 @@ if($_SESSION["locr"]=="/") $_SESSION["locr"] = "";
 require_once("globals.php");
 require_once("db.php");
 
+// Allow event administrators to import problems before contest activation.
+// Explicit contest selection is intentionally unavailable to teams/score.
+$seminfoContest = null;
+if (getenv('SEMINFO_PROFILE') && isset($_GET['contest']) &&
+    ctype_digit((string)$_GET['contest']) && (int)$_GET['contest'] > 0) {
+    $seminfoContest = (int)$_GET['contest'];
+}
+
 if (!isset($_GET["name"])) {
 	if (ValidSession())
 	  DBLogOut($_SESSION["usertable"]["contestnumber"], 
@@ -80,7 +88,7 @@ function computeHASH()
 	passHASH = js_myhash(js_myhash(document.form1.password.value)+'<?php echo session_id(); ?>');
 	document.form1.name.value = '';
 	document.form1.password.value = '                                                                                 ';
-	document.location = 'index.php?name='+userHASH+'&password='+passHASH;
+	document.location = 'index.php?name='+userHASH+'&password='+passHASH<?php if ($seminfoContest !== null) echo "+'&contest=" . $seminfoContest . "'"; ?>;
 }
 </script>
 <?php
@@ -88,7 +96,12 @@ if(function_exists("globalconf") && function_exists("sanitizeVariables")) {
   if(isset($_GET["name"]) && $_GET["name"] != "" ) {
 	$name = $_GET["name"];
 	$password = $_GET["password"];
-	$usertable = DBLogIn($name, $password);
+	if ($seminfoContest !== null) {
+		$candidate = ctype_alnum($name) ? DBGetRow("select usernumber from usertable where contestnumber=$seminfoContest and username='$name' and usertype='admin'", 0) : null;
+		$usertable = $candidate !== null ? DBLogInContest($name, $password, $seminfoContest) : false;
+	} else {
+		$usertable = DBLogIn($name, $password);
+	}
 	if(!$usertable) {
 		ForceLoad("index.php");
 	}

@@ -839,6 +839,11 @@ function DBUpdateContest ($param, $c=null) {
 	}
 	$ret=1;
 	if ($active == 1) {
+		if (getenv('SEMINFO_PROFILE') && PHP_SAPI !== 'cli') {
+			if ($cw) DBExec($c, "rollback work");
+			MSGError('SEMINFO: use manage.py activate; configuracao e ensaios precisam ser confirmados.');
+			return false;
+		}
 		$ret=2;
 		DBExec($c, "update contesttable set contestactive='f'", "DBUpdateContest(deactivate)");
 		DBExec($c, "update contesttable set contestactive='t' where contestnumber=$number",

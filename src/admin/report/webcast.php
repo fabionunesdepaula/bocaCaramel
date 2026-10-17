@@ -19,6 +19,9 @@
 //echo "DISABLED";
 //return;
 
+// Full results must not bypass a frozen scoreboard on event deployments.
+// The teacher exports a consistent snapshot with manage.py export via CLI.
+if (getenv('SEMINFO_PROFILE')) { http_response_code(403); exit; }
 require('header.php');
 if(!isset($_GET['webcastcode']) || !ctype_alnum($_GET['webcastcode'])) exit;
 $webcastcode=$_GET['webcastcode'];
