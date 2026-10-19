@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hmac
+import html
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ import manage as kit
 from admission import Handler, Server
 
 PORT = 17862
+PREPARATION_PORT = 17864
 ORIGIN = f'http://127.0.0.1:{PORT}'
 LABELS = {'si': 'Graduação / SI · Lab 3', 'tii': 'Médio/Técnico / TII · Lab 4'}
 CHECKS = {
@@ -31,7 +33,9 @@ CHECKS = {
     'problems_reviewed': ('Questões revisadas', 'Confira os pacotes da Cristiane destinados a esta categoria, limites, respostas e tempos confirmados. Médio/Técnico e Graduação têm questões diferentes; problemas reais não entram nas imagens das equipes.'),
 }
 ACTIONS = {'start', 'stop', 'prepare', 'verify', 'backup', 'restore-check', 'restore',
-           'activate', 'publish-score', 'install-autostart', 'initialize', 'attest', 'pair', 'pair-local', 'open-hub'}
+           'activate', 'publish-score', 'install-autostart', 'initialize', 'attest', 'pair', 'pair-local', 'open-hub',
+           'start-preparation', 'stop-preparation', 'validate-solutions'}
+PREPARATION_ACTIONS = {'initialize','start-preparation','stop-preparation','prepare','verify','validate-solutions','backup','restore-check'}
 CONFIRM = {'stop': 'PARAR', 'prepare': 'PREPARAR', 'activate': 'ATIVAR',
            'publish-score': 'PUBLICAR', 'restore': 'RESTAURAR', 'install-autostart': 'INSTALAR'}
 
@@ -105,8 +109,9 @@ def backup_path(name, profile):
 
 
 class Organizer:
-    def __init__(self):
-        self.folder = kit.LOCAL/'organizer'
+    def __init__(self, preparation_only=False):
+        self.preparation_only = preparation_only
+        self.folder = kit.LOCAL/('organizer-preparation' if preparation_only else 'organizer')
         kit.private_directory(self.folder)
         self.lock = threading.RLock()
         self.job = read_json(self.folder/'last-job.json')
@@ -132,32 +137,42 @@ class Organizer:
             kit.write_json(self.folder/'settings.json', {'profile': profile})
             self.wake.set()
 
-    def save_config(self, data):
+    def save_config(self, data, *, timing_only=False):
         with self.lock:
             self.idle()
             profile = self.profile()
+            if data.get('profile',profile) != profile:
+                raise ValueError('A categoria selecionada mudou. Recarregue o formulário.')
             editable(profile)
             original = kit.config(profile)
             c = dict(original)
-            for key in ('server_ip', 'subnet'):
+            for key in (() if timing_only else ('server_ip', 'subnet')):
                 value = data.get(key, '')
                 if not isinstance(value, str):
                     raise ValueError('Endereço de rede inválido.')
                 c[key] = value.strip() or None
-            controls = data.get('control_ips', '')
-            if not isinstance(controls, str):
-                raise ValueError('IPs das centrais inválidos.')
-            c['control_ips'] = [s.strip() for s in controls.replace('\n', ',').split(',') if s.strip()]
-            for key in ('duration_minutes', 'freeze_minutes_before_end'):
+            if not timing_only:
+                controls = data.get('control_ips', '')
+                if not isinstance(controls, str):
+                    raise ValueError('IPs das centrais inválidos.')
+                c['control_ips'] = [s.strip() for s in controls.replace('\n', ',').split(',') if s.strip()]
+            update_timing = timing_only or 'start' in data
+            for key in (('duration_minutes', 'freeze_minutes_before_end') if update_timing else ()):
                 value = str(data.get(key, '')).strip()
                 if value and not re.fullmatch(r'\d{1,4}', value):
                     raise ValueError('Duração e congelamento devem ser informados em minutos inteiros.')
                 c[key] = int(value) if value else None
-            start = data.get('start', '')
-            if not isinstance(start, str) or not re.fullmatch(r'2026-10-29T\d\d:\d\d', start):
-                raise ValueError('Escolha o horário em 29/10/2026.')
-            c['start'] = start + ':00-03:00'
-            c['timing_confirmed'] = data.get('timing_confirmed') is True
+            if update_timing:
+                start = data.get('start', '')
+                if not isinstance(start, str) or not re.fullmatch(r'2026-10-29T\d\d:\d\d', start):
+                    raise ValueError('Escolha o horário em 29/10/2026.')
+                c['start'] = start + ':00-03:00'
+                c['timing_confirmed'] = data.get('timing_confirmed') is True
+                duration, freeze = c['duration_minutes'], c['freeze_minutes_before_end']
+                if duration is not None and duration < 1:
+                    raise ValueError('A duração deve ser maior que zero.')
+                if duration is not None and freeze is not None and freeze >= duration:
+                    raise ValueError('O congelamento deve ser menor que a duração; zero significa sem congelamento.')
             if bool(c['server_ip']) != bool(c['subnet']):
                 raise ValueError('Informe o IP e a sub-rede juntos, ou deixe ambos pendentes.')
             kit.validate(c, network=bool(c['server_ip']))
@@ -177,11 +192,17 @@ class Organizer:
             c = read_json(kit.LOCAL/profile/'lab.json', read_json(kit.HERE/'labs'/f'{profile}.json'))
             records = read_json(kit.LOCAL/profile/'attestations.json', {})
             src, cli, cfg = kit.source_hash(), kit.client_source_hash(), kit.config_hash(c)
+            from problems import digest
+            problem_values = self.cache.get(profile, {}).get('problems', [])
             checklist = [{'id': key, 'label': value[0], 'instructions': value[1],
                           'current': all(records.get(key, {}).get(k) == v for k, v in
                               [('config_sha256', cfg), ('server_source_sha256', src), ('client_source_sha256', cli)]),
                           'operator': records.get(key, {}).get('operator', ''), 'at': records.get(key, {}).get('at_utc', '')}
                          for key, value in CHECKS.items()]
+            for check in checklist:
+                if check['id']=='problems_reviewed':
+                    plain = [{k:v for k,v in p.items() if k!='validation'} for p in problem_values]
+                    check['current'] = check['current'] and bool(plain) and records.get('problems_reviewed',{}).get('problems_sha256') == digest(plain) and all(p['validation']['passed'] and p['validation']['complete'] for p in problem_values)
             backups = []
             for path in sorted((kit.HERE/'backups').glob('*'), reverse=True):
                 try:
@@ -189,13 +210,14 @@ class Organizer:
                     if manifest.get('profile') == profile:
                         checked = read_json(path/'restore-verified.json', {})
                         backups.append({'id': path.name, 'created': manifest['created_utc'],
-                                        'verified': checked.get('dump_sha256') == manifest['dump_sha256']})
+                                        'verified': checked.get('dump_sha256') == manifest['dump_sha256'] and checked.get('reference_files_sha256',{}) == manifest.get('reference_files_sha256',{})})
                 except (OSError, ValueError, KeyError):
                     continue
             from hub import normalize_catalog
             catalog = normalize_catalog(read_json(kit.LOCAL/'hub/desks.json', {'desks': {}}), profile)
             verification = read_json(kit.LOCAL/profile/'verification.json', {})
             return {'profile': profile, 'label': LABELS[profile], 'config': c,
+                    'preparation_only':self.preparation_only,
                     'runtime': self.cache.get(profile, {'checking': True}),
                     'verification_current': verification.get('ok') is True and verification.get('config_sha256') == cfg and verification.get('server_source_sha256') == src,
                     'checklist': checklist, 'backups': backups[:40], 'job': self.job,
@@ -216,6 +238,12 @@ class Organizer:
                 result['admission'] = running(profile)
                 if (kit.LOCAL/profile/'lab.json').exists():
                     result['database'] = database_status(profile)
+                    if result['database']['prepared']:
+                        from problems import overview
+                        result['problems'] = overview(profile)
+                    result['preparation_ready'] = (result['services']['boca-web'].startswith('Up') and '(healthy)' in result['services']['boca-web']
+                        and result['database']['prepared'] and not result['database']['active']
+                        and not result['database']['runs'] and not result['admission'])
             except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
                 result['error'] = safe_error(exc)
             with self.lock:
@@ -226,9 +254,13 @@ class Organizer:
     def submit(self, action, data):
         if action not in ACTIONS:
             raise ValueError('Tarefa desconhecida.')
+        if self.preparation_only and action not in PREPARATION_ACTIONS:
+            raise ValueError('Esta janela prepara provas. Use o atalho Central SEMINFO para operar a rede, aprovar equipes ou ativar a maratona.')
         with self.lock:
             self.idle()
             profile = self.profile()
+            if data.get('profile',profile) != profile:
+                raise ValueError('A categoria selecionada mudou. Atualize a página antes de continuar.')
             expected = f'{CONFIRM[action]} LAB {3 if profile == "si" else 4}' if action in CONFIRM else None
             if expected and data.get('confirmation') != expected:
                 raise ValueError(f'Para confirmar esta ação, digite {expected}.')
@@ -250,6 +282,9 @@ class Organizer:
                     raise ValueError('O arquivo precisa ser um descritor de banca.')
             if action in ('restore', 'restore-check'):
                 backup_path(data.get('backup'), profile)
+            if action == 'validate-solutions':
+                from problems import parse_sources
+                parse_sources(data)
             self.job = {'id': secrets.token_hex(8), 'action': action, 'profile': profile,
                         'status': 'running', 'message': 'Executando. Aguarde; não feche o Docker Desktop.',
                         'started': dt.datetime.now(dt.timezone.utc).isoformat()}
@@ -277,12 +312,33 @@ class Organizer:
             self.wake.set()
 
     def execute(self, action, profile, data):
+        if self.preparation_only and action not in PREPARATION_ACTIONS:
+            raise ValueError('Ação indisponível no modo de preparação.')
         if action in ('start', 'install-autostart', 'activate'):
             kit.validate(kit.config(profile), network=True, timing=action == 'activate')
-        if action in ('start', 'install-autostart', 'restore'):
+        if action in ('start', 'start-preparation', 'install-autostart', 'restore'):
             other = 'tii' if profile == 'si' else 'si'
             if kit.exists(f'boca-{other}-boca-web-1') and kit.inspect(f'boca-{other}-boca-web-1')['State']['Running']:
                 raise ValueError('A outra sala está em execução neste computador. Cada BOCA deve funcionar na sua própria mesa.')
+        if action == 'start-preparation':
+            editable(profile)
+            lock = read_json(kit.DIST/'server.lock.json',{})
+            if lock.get('source_sha256') != kit.source_hash():
+                raise ValueError('As imagens precisam ser atualizadas pelo apoio técnico antes de preparar a prova.')
+            kit.compose(profile,'up','-d','--no-build','--pull','never','boca-db','boca-web')
+            kit.wait_web(profile)
+            return 'BOCA de preparação aberto somente nesta mesa. Em Prova e questões, prepare a prova e entre como admin para criar, importar ou editar questões. As equipes continuam sem acesso.'
+        if action == 'stop-preparation':
+            editable(profile)
+            kit.compose(profile,'stop','boca-web','boca-jail')
+            return 'BOCA de preparação fechado. O banco e as questões foram preservados; você pode selecionar outra categoria.'
+        if action == 'validate-solutions':
+            from problems import validate
+            report = validate(profile,data)
+            if not report['passed']:
+                verdicts = ', '.join(r['language']+': '+r['verdict'] for r in report['results'])
+                raise ValueError('Referências reprovadas: '+verdicts+'. Confira o pacote, os limites e as soluções; veja os resultados na lista de questões.')
+            return ('Referências aceitas pelo juiz isolado. '+ ('As quatro linguagens foram conferidas.' if report['complete'] else 'Ainda faltam: '+', '.join(report['missing_languages'])+'.'))
         if action == 'initialize':
             # The organizer must not accidentally replace the identity pinned in USBs.
             folder = kit.LOCAL/profile
@@ -366,8 +422,11 @@ class Panel(Handler):
         return self.headers.get('Host') == f'127.0.0.1:{self.server.server_port}'
 
     def authorized(self):
-        return any(hmac.compare_digest(c.strip(), 'seminfo_organizer='+self.server.token)
+        return any(hmac.compare_digest(c.strip(), self.session_cookie()+'='+self.server.token)
                    for c in self.headers.get('Cookie', '').split(';'))
+
+    def session_cookie(self):
+        return 'seminfo_organizer_'+str(self.server.server_port)
 
     def reply(self, status, data, content_type='application/json; charset=utf-8', **kwargs):
         payload = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, dict) else data if isinstance(data, bytes) else data.encode()
@@ -387,10 +446,11 @@ class Panel(Handler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Referrer-Policy', 'no-referrer')
         if cookie:
-            self.send_header('Set-Cookie', f'seminfo_organizer={self.server.token}; HttpOnly; SameSite=Strict; Path=/')
+            self.send_header('Set-Cookie', f'{self.session_cookie()}={self.server.token}; HttpOnly; SameSite=Strict; Path=/')
         self.end_headers()
 
     def do_GET(self):
+        parsed = None
         try:
             if not self.valid_host():
                 self.reply(403, {'error': 'Endereço local inválido.'}); return
@@ -409,8 +469,21 @@ class Panel(Handler):
                 self.reply(200, app.state() | {'csrf': self.server.token})
             elif parsed.path.startswith('/open/'):
                 dest = parsed.path.removeprefix('/open/')
+                if app.preparation_only and dest not in ('boca','problems','problem-builder'):
+                    raise ValueError('Use a Central SEMINFO completa para aprovar equipes e operar os placares.')
                 if dest == 'boca':
                     self.redirect('http://127.0.0.1:18000/boca/')
+                elif dest in ('problems','problem-builder'):
+                    with app.lock:
+                        app.idle()
+                        profile=app.profile()
+                        editable(profile)
+                        name=f'boca-{profile}-boca-web-1'
+                        if not kit.exists(name) or kit.inspect(name)['State'].get('Health',{}).get('Status')!='healthy':
+                            raise ValueError('Abra o BOCA de preparação pela aba Prova e questões antes de continuar.')
+                        destination='problems' if dest=='problems' else 'builder'
+                        contest=kit.config(profile)['contest_id']
+                        self.redirect(f'http://127.0.0.1:18000/boca/index.php?contest={contest}&destination={destination}')
                 elif dest == 'admission':
                     from admission_setup import running
                     if not running(app.profile()):
@@ -430,17 +503,24 @@ class Panel(Handler):
             else:
                 self.reply(404, {'error': 'Página não encontrada.'})
         except (OSError, ValueError, RuntimeError, KeyError) as exc:
-            self.reply(400, safe_error(exc)+'\nVolte à Central SEMINFO para conferir o diagnóstico.', 'text/plain; charset=utf-8')
+            if parsed is not None and parsed.path in ('/open/problems','/open/problem-builder'):
+                self.reply(400,'<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preparar BOCA</title><link rel="stylesheet" href="/style.css"><main><article class="card"><h1>Prepare o BOCA desta categoria</h1><p>'+html.escape(safe_error(exc))+'</p><p>Na aba Prova e questões, use Abrir BOCA de preparação e aguarde a confirmação. Depois entre como admin para criar ou importar questões.</p><a class="button" href="/?tab=contest">Voltar à configuração da prova</a></article></main></html>','text/html; charset=utf-8')
+            else:
+                self.reply(400, safe_error(exc)+'\nVolte à Central SEMINFO para conferir o diagnóstico.', 'text/plain; charset=utf-8')
 
     def do_POST(self):
         try:
+            # Consume only the bounded body before an early rejection. Closing
+            # with unread request bytes can reset the TCP connection on Windows
+            # and discard the HTTP error. Authorization still precedes parsing.
+            payload = self.body(maximum=800000 if self.path=='/api/job' else 32000)
             if not self.valid_host() or not self.authorized():
                 self.reply(403, {'error': 'Sessão encerrada. Abra novamente o atalho Central SEMINFO.'}); return
             if self.headers.get('Origin') != f'http://127.0.0.1:{self.server.server_port}' or self.headers.get('Content-Type') != 'application/json':
                 self.reply(403, {'error': 'Origem inválida.'}); return
             if not hmac.compare_digest(self.headers.get('X-SEMINFO-CSRF', ''), self.server.token):
                 self.reply(403, {'error': 'Atualize a página antes de continuar.'}); return
-            data = json.loads(self.body(maximum=32000))
+            data = json.loads(payload)
             if not isinstance(data, dict):
                 raise ValueError('Formulário inválido.')
             app = self.server.app
@@ -448,6 +528,8 @@ class Panel(Handler):
                 app.select(data.get('profile')); result = {'message': 'Laboratório selecionado.'}
             elif self.path == '/api/config':
                 result = app.save_config(data)
+            elif self.path == '/api/timing':
+                result = app.save_config(data,timing_only=True)
             elif self.path == '/api/job':
                 result = app.submit(data.get('action'), data)
             elif self.path == '/api/refresh':
@@ -462,6 +544,8 @@ class Panel(Handler):
                     [('admin', 'BOCA_PASSWORD'), ('placar', 'SCORE_PASSWORD')]+
                     [(f'{app.profile()}{i:02}', f'TEAM_{i:02}') for i in range(1, 11)]]}
             elif self.path == '/api/descriptor':
+                if app.preparation_only:
+                    raise ValueError('Use a Central SEMINFO completa para parear as bancas.')
                 if data.get('confirmation') != 'EXPORTAR PAREAMENTO':
                     raise ValueError('Confirme que o arquivo será entregue somente à organização.')
                 from admission_setup import descriptor
@@ -478,15 +562,16 @@ class Panel(Handler):
             self.reply(400, {'error': safe_error(exc)})
 
 
-def serve(open_browser=False):
-    if os.name == 'nt':
+def serve(open_browser=False, preparation_only=False):
+    if os.name == 'nt' and not preparation_only:
         import ctypes
         if not ctypes.windll.shell32.IsUserAnAdmin():
             raise ValueError('Abra pelo atalho Central SEMINFO; o Windows solicitará permissão para gerenciar o firewall da mesa.')
-    app = Organizer()
-    server = Server(('127.0.0.1', PORT), Panel, None)
+    app = Organizer(preparation_only=preparation_only)
+    port = PREPARATION_PORT if preparation_only else PORT
+    server = Server(('127.0.0.1', port), Panel, None)
     server.app, server.token = app, secrets.token_urlsafe(32)
-    url = ORIGIN+'/login?token='+server.token
+    url = f'http://127.0.0.1:{port}/login?token='+server.token
     (app.folder/'panel.txt').write_text(url, encoding='utf-8')
     threading.Thread(target=app.refresh, daemon=True).start()
     if open_browser:
@@ -498,10 +583,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serve', action='store_true')
     parser.add_argument('--open', action='store_true')
+    parser.add_argument('--prepare', action='store_true',help='Configuração local de provas, sem alterar firewall e sem exigir administrador do Windows')
     args = parser.parse_args()
     if args.serve:
-        serve(args.open); return
-    path = kit.LOCAL/'organizer/panel.txt'
+        serve(args.open,preparation_only=args.prepare); return
+    path = kit.LOCAL/('organizer-preparation/panel.txt' if args.prepare else 'organizer/panel.txt')
     if path.exists():
         from admission_setup import authenticated_opener
         try:
@@ -510,7 +596,9 @@ def main():
                     webbrowser.open(path.read_text()); return
         except OSError:
             pass
-    if os.name == 'nt':
+    if args.prepare:
+        serve(open_browser=True,preparation_only=True)
+    elif os.name == 'nt':
         # UAC stays with Windows; no passwords are collected by the application.
         import ctypes
         if ctypes.windll.shell32.IsUserAnAdmin():

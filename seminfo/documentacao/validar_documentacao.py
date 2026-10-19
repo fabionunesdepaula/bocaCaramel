@@ -32,6 +32,12 @@ for item in manifest['files']:
             if '\u25a0' in (page.extract_text() or ''):report['errors'].append(f'Glifo inesperado: {target.name} p.{i}')
     report['documents'].append({'file':item['file'],'pages':len(pdf.pages),'min_page_characters':min(page_lengths)})
 
+for item in manifest.get('screenshots',[]):
+    path=HERE/item['file']
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=item['sha256']:
+        report['errors'].append('Captura ausente ou divergente: '+item['file'])
+report['screenshots_checked']=len(manifest.get('screenshots',[]))
+
 for path in HERE.glob('*.md'):
     for url in re.findall(r'\]\(([^)]+)\)',path.read_text(encoding='utf-8')):
         if '://' not in url and not url.startswith('#') and not (path.parent/url.split('#')[0]).exists():

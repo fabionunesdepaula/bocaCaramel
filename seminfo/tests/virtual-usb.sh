@@ -5,7 +5,11 @@ set -euo pipefail
 iso=$(readlink -f "$1")
 work=$(mktemp -d /work/seminfo-vm.XXXXXX)
 image="$work/usb.img"
-cp --sparse=always "$iso" "$image"
+# Stream bounded reads: copy_file_range used by cp can fail with ENOMEM for
+# large Windows bind-mounted ISOs under Docker Desktop. Verify the ISO prefix
+# before modifying the disposable file's partition table.
+dd if="$iso" of="$image" bs=4M iflag=fullblock conv=sparse status=progress
+cmp -n "$(stat -c %s "$iso")" "$iso" "$image"
 truncate -s 32G "$image"
 sgdisk -e "$image"
 sgdisk -n 4:0:0 -c 4:seminfo-home -t 4:8300 "$image"

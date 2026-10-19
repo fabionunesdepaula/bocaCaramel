@@ -139,7 +139,13 @@ find . -name "*.java" | while read lin; do
   echo \$? > ../compileit.retcode
 done
 rm -f ../$jarfile
-\$jar cvfe ../$jarfile $mainname *
+\$jar cvfe ../seminfo-compiled.jar $mainname *
+jarstatus=\$?
+if [ "\$jarstatus" != "0" ]; then
+    echo \$jarstatus > ../compileit.retcode
+    exit \$jarstatus
+fi
+mv ../seminfo-compiled.jar ../$jarfile
 exit 0
 EOF
 chmod 755 compileit.sh

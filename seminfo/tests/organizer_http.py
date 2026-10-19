@@ -70,7 +70,7 @@ def main():
             'server_source_sha256':kit.source_hash(),'assets_http':True,'activation_without_confirmation_rejected':True,
             'actual_verification_job':verification['status'],'actual_backup_restore_job':backup['status'],
             'backup':latest['id'],'database_unchanged':True,'configuration_unchanged':True,
-            'browser_visual_test':{'passed':False,'reason':'Integrated browser kernel unavailable; SENTRA policy blocks localhost navigation'},
+            'browser_visual_test':{'passed':False,'not_run':True,'reason':'This script checks HTTP only; graphical review requires a separate observed check'},
             'windows_uac_and_firewall_tested':False})
         print('PASSOU: central HTTP, tarefas reais de verificacao e backup/restauracao, dados e configuracao preservados.')
     finally:

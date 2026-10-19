@@ -27,9 +27,14 @@ BASES = {'web': 'ghcr.io/joaofazolo/boca-docker/boca-web:latest',
          'db': 'postgres:14-alpine', 'grafana': 'grafana/grafana:latest'}
 
 
+def hidden_process_options():
+    """Console helpers must not create Windows Terminal windows from pythonw."""
+    return {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+
+
 def run(args, *, data=None, timeout=600, capture=True):
     p = subprocess.run([str(a) for a in args], input=data, stdout=subprocess.PIPE if capture else None,
-                       stderr=subprocess.PIPE if capture else None, timeout=timeout)
+                       stderr=subprocess.PIPE if capture else None, timeout=timeout, **hidden_process_options())
     if p.returncode:
         # Error output can contain SQL, connection strings or environment values.
         detail = (p.stderr or b'').decode('utf-8', 'replace')[-2000:]
@@ -199,7 +204,8 @@ def inspect(target):
 
 
 def exists(target):
-    return subprocess.run(['docker', 'inspect', target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return subprocess.run(['docker', 'inspect', target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          **hidden_process_options()).returncode == 0
 
 
 def fingerprint(container):
@@ -214,6 +220,25 @@ def fingerprint(container):
     sql = "SELECT count(*)::text || ':' || coalesce(md5(string_agg(loid::text || ':' || pageno::text || ':' || encode(data,'hex'),'' ORDER BY loid,pageno)),'') FROM pg_largeobject"
     result['largeobjects'] = run(['docker', 'exec', container, 'psql', '-U', 'postgres', '-d', 'bocadb', '-Atc', sql]).decode().strip()
     return result
+
+
+def reference_files(root):
+    """Only recoverable source/report JSON; exclude temporary judge passwords."""
+    result = {}
+    for path in Path(root).glob('*/*.json'):
+        if path.parent.name.isdecimal() and 1 <= int(path.parent.name) <= 9999 and path.name in ('sources.json','validation.json'):
+            if path.is_symlink() or path.parent.is_symlink():
+                raise ValueError('Pasta de referências inválida')
+            result[path.relative_to(root).as_posix()] = digest(path)
+    return result
+
+
+def check_reference_backup(folder, manifest):
+    expected = manifest.get('reference_files_sha256',{})
+    actual = reference_files(Path(folder)/'reference-solutions')
+    if expected != actual:
+        raise ValueError('Checksum das soluções de referência do backup diverge')
+    return actual
 
 
 def backup(profile, *, resume=True):
@@ -243,8 +268,14 @@ def backup(profile, *, resume=True):
             for name in ('admission-cert.pem','admission-key.pem','admission-control.txt','admission-score.txt','admission-audit.jsonl'):
                 if (LOCAL/profile/name).exists():
                     shutil.copy2(LOCAL/profile/name,folder/name)
+        references = reference_files(LOCAL/profile/'reference-solutions')
+        for relative in references:
+            path = folder/'reference-solutions'/relative
+            path.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(LOCAL/profile/'reference-solutions'/relative,path)
         write_json(folder / 'manifest.json', {'profile': profile, 'fingerprint': before,
                    'dump_sha256': digest(folder / 'database.dump'), 'database_image': inspect(db)['Image'],
+                   'reference_files_sha256': references,
                    'original_mounts': inspect(db)['Mounts'], 'created_utc': dt.datetime.now(dt.timezone.utc).isoformat()})
     finally:
         if running and resume:
@@ -259,7 +290,8 @@ def sql(container, text, database='postgres'):
 
 def wait_database(container):
     for _ in range(60):
-        p = subprocess.run(['docker', 'exec', container, 'pg_isready', '-U', 'postgres'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.run(['docker', 'exec', container, 'pg_isready', '-U', 'postgres'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, **hidden_process_options())
         if p.returncode == 0:
             return
         time.sleep(1)
@@ -284,6 +316,7 @@ def check_restore(folder):
     m = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
     if digest(folder / 'database.dump') != m['dump_sha256']:
         raise ValueError('Checksum do backup diverge')
+    references = check_reference_backup(folder,m)
     name = 'seminfo-restore-' + secrets.token_hex(5)
     volume = name + '-data'
     run(['docker', 'volume', 'create', volume])
@@ -296,22 +329,23 @@ def check_restore(folder):
         if actual != m['fingerprint']:
             raise RuntimeError('Restauracao diverge: contagens/hashes ou large objects diferentes')
         write_json(folder / 'restore-verified.json', {'dump_sha256': m['dump_sha256'], 'fingerprint': actual,
+                   'reference_files_sha256': references,
                    'verified_utc': dt.datetime.now(dt.timezone.utc).isoformat()})
         print('Restauracao isolada aprovada: todas as tabelas e large objects conferem.')
     finally:
-        subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(['docker', 'volume', 'rm', volume], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden_process_options())
+        subprocess.run(['docker', 'volume', 'rm', volume], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden_process_options())
 
 
 def source_hash():
     h = hashlib.sha256()
-    for folder in (ROOT / 'src', ROOT / 'tools', HERE / 'server'):
+    for folder in (ROOT / 'src', ROOT / 'tools', HERE / 'server', ROOT/'doc/problemexamples/problemtemplate'):
         for p in sorted(folder.rglob('*')):
             if p.is_file():
                 h.update(str(p.relative_to(ROOT)).replace('\\', '/').encode())
                 h.update(p.read_bytes())
     for name in ('manage.py','admission.py','admission_wire.py','admission_setup.py','hub.py','webcast.py','scoring.py','compose.yml','firewall-mesa.ps1','install-admission.ps1','stop-admission.ps1',
-                 'organizer.py','launch-organizer.ps1','install-organizer-shortcut.ps1','Abrir Central SEMINFO.vbs'):
+                 'organizer.py','problems.py','launch-organizer.ps1','install-organizer-shortcut.ps1','Abrir Central SEMINFO.vbs'):
         path = HERE/name
         if path.exists():
             h.update(name.encode()); h.update(path.read_bytes())
@@ -412,6 +446,11 @@ def restore(profile, folder):
             raise ValueError('Destino tem container parado; examine seus dados antes da recuperacao')
         if b'bocadb' in sql(db,"SELECT datname FROM pg_database WHERE datname='bocadb';"):
             raise ValueError('Destino ja contem bocadb; use uma mesa vazia')
+    references = check_reference_backup(folder,manifest)
+    for relative, checksum in references.items():
+        existing = LOCAL/profile/'reference-solutions'/relative
+        if existing.exists() and digest(existing) != checksum:
+            raise ValueError('Existem referências diferentes nesta pasta privada; preserve-as antes de restaurar')
     initialize(profile)
     if (folder / 'event-credentials.json').exists():
         shutil.copy2(folder / 'event-credentials.json', LOCAL / profile / 'credentials.json')
@@ -420,6 +459,10 @@ def restore(profile, folder):
             if (folder/name).exists():
                 shutil.copy2(folder/name,LOCAL/profile/name)
         initialize(profile)
+    for relative in references:
+        target = LOCAL/profile/'reference-solutions'/relative
+        target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(folder/'reference-solutions'/relative,target)
     compose(profile, 'up', '-d', 'boca-db')
     wait_database(db)
     creds=json.loads((LOCAL / profile / 'credentials.json').read_text(encoding='utf-8'))
@@ -517,6 +560,9 @@ def attest(profile, check, operator, note):
     data[check] = {'operator': operator, 'note': note, 'config_sha256': config_hash(config(profile)),
                    'server_source_sha256': source_hash(), 'client_source_sha256': client_source_hash(),
                    'at_utc': dt.datetime.now(dt.timezone.utc).isoformat()}
+    if check == 'problems_reviewed':
+        from problems import assert_reviewable
+        data[check]['problems_sha256'] = assert_reviewable(profile)
     write_json(path, data)
     print('Validacao presencial registrada; nao substitui a execucao do teste.')
 
@@ -535,6 +581,9 @@ def activate(profile):
                or records.get(key, {}).get('client_source_sha256') != client_source_hash()]
     if missing:
         raise ValueError('Ativacao bloqueada. Ensaios pendentes/desatualizados: ' + ', '.join(missing))
+    from problems import assert_reviewable
+    if records['problems_reviewed'].get('problems_sha256') != assert_reviewable(profile):
+        raise ValueError('As questões mudaram desde a revisão. Valide as referências e registre a revisão atual.')
     probe_web(c['server_ip'])
     result = control(profile, 'activate')
     if not result.get('ok'):

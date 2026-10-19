@@ -28,7 +28,7 @@ from reportlab.platypus.tableofcontents import TableOfContents
 
 OUT = HERE/'output/pdf'
 INK, MUTED, GREEN, PALE = '#202b25', '#506156', '#2f663e', '#f0f5ef'
-WIDTH = A4[0]-40*mm
+WIDTH = A4[0]-36*mm
 FONT, BOLD, ITALIC, MONO = 'Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Courier'
 for paths in [('C:/Windows/Fonts/arial.ttf','C:/Windows/Fonts/arialbd.ttf','C:/Windows/Fonts/ariali.ttf','C:/Windows/Fonts/consola.ttf'),
               ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf','/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf')]:
@@ -38,11 +38,11 @@ for paths in [('C:/Windows/Fonts/arial.ttf','C:/Windows/Fonts/arialbd.ttf','C:/W
         pdfmetrics.registerFontFamily(FONT,normal=FONT,bold=BOLD,italic=ITALIC,boldItalic=BOLD)
         break
 styles = getSampleStyleSheet()
-styles.add(ParagraphStyle(name='Text',fontName=FONT,fontSize=10.2,leading=15,textColor=colors.HexColor(INK),spaceAfter=8,splitLongWords=True))
-styles.add(ParagraphStyle(name='TitleIF',parent=styles['Text'],fontName=BOLD,fontSize=27,leading=33,spaceAfter=17))
-styles.add(ParagraphStyle(name='ChapterIF',parent=styles['Text'],fontName=BOLD,fontSize=17,leading=22,textColor=colors.HexColor(GREEN),spaceBefore=12,spaceAfter=12,keepWithNext=True))
+styles.add(ParagraphStyle(name='Text',fontName=FONT,fontSize=9.6,leading=13.5,textColor=colors.HexColor(INK),spaceAfter=6,splitLongWords=True))
+styles.add(ParagraphStyle(name='TitleIF',parent=styles['Text'],fontName=BOLD,fontSize=25,leading=29,spaceAfter=12))
+styles.add(ParagraphStyle(name='ChapterIF',parent=styles['Text'],fontName=BOLD,fontSize=17,leading=21,textColor=colors.HexColor(GREEN),spaceBefore=7,spaceAfter=9,keepWithNext=True))
 styles.add(ParagraphStyle(name='SubIF',parent=styles['Text'],fontName=BOLD,fontSize=12,leading=17,spaceBefore=14,spaceAfter=8,keepWithNext=True))
-styles.add(ParagraphStyle(name='CellIF',parent=styles['Text'],fontSize=8.5,leading=12,spaceAfter=0))
+styles.add(ParagraphStyle(name='CellIF',parent=styles['Text'],fontSize=9.1,leading=12,spaceAfter=0))
 styles.add(ParagraphStyle(name='CellHeadIF',parent=styles['CellIF'],fontName=BOLD,textColor=colors.HexColor(GREEN)))
 styles.add(ParagraphStyle(name='CodeIF',parent=styles['Text'],fontName=MONO,fontSize=8,leading=12,backColor=colors.HexColor('#f1f2ef'),borderPadding=9,spaceBefore=7,spaceAfter=12,wordWrap='CJK'))
 styles.add(ParagraphStyle(name='SmallIF',parent=styles['Text'],fontSize=9,leading=13,textColor=colors.HexColor(MUTED)))
@@ -65,7 +65,7 @@ def inline(element):
 
 class ManualDoc(BaseDocTemplate):
     def __init__(self,filename,title,chapter_pages):
-        super().__init__(str(filename),pagesize=A4,leftMargin=20*mm,rightMargin=20*mm,topMargin=24*mm,bottomMargin=21*mm,title=title,author='IF Goiano - Núcleo de Informática / Organização SEMINFO')
+        super().__init__(str(filename),pagesize=A4,leftMargin=18*mm,rightMargin=18*mm,topMargin=23*mm,bottomMargin=19*mm,title=title,author='IF Goiano - Núcleo de Informática / Organização SEMINFO')
         self.book_title=title;self.chapter_pages=chapter_pages
         self.addPageTemplates(PageTemplate(id='main',frames=[Frame(self.leftMargin,self.bottomMargin,self.width,self.height,id='body',leftPadding=0,rightPadding=0,topPadding=0,bottomPadding=0)],onPage=self.decorate))
 
@@ -76,7 +76,7 @@ class ManualDoc(BaseDocTemplate):
         canvas.setFillColor(colors.HexColor(GREEN));canvas.setFont(BOLD,8)
         canvas.drawString(20*mm,A4[1]-12*mm,'XIX SEMINFO 2026 | IF GOIANO - CAMPUS URUTAÍ')
         canvas.setFont(FONT,8);canvas.setFillColor(colors.HexColor(MUTED))
-        canvas.drawString(20*mm,12*mm,'Organização da maratona | edição 16/10/2026')
+        canvas.drawString(20*mm,12*mm,'Guia visual | edição 18/10/2026')
         canvas.drawRightString(A4[0]-20*mm,12*mm,f'Página {doc.page}')
         canvas.restoreState()
 
@@ -101,7 +101,7 @@ def table_flow(element,compact=False):
     elif count==3:widths=[WIDTH*.27,WIDTH*.43,WIDTH*.30]
     else:widths=[WIDTH/count]*count
     table=Table(rows,colWidths=widths,repeatRows=1,hAlign='LEFT',spaceBefore=7,spaceAfter=13)
-    padding=5 if compact else 8
+    padding=5 if compact else 6
     table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('BACKGROUND',(0,0),(-1,0),colors.HexColor(PALE)),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#fafbf9')]),('LINEBELOW',(0,0),(-1,0),.6,colors.HexColor('#afc6b0')),('LINEBELOW',(0,1),(-1,-1),.3,colors.HexColor('#dce4d9')),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8),('TOPPADDING',(0,0),(-1,-1),padding),('BOTTOMPADDING',(0,0),(-1,-1),padding)]))
     return table
 
@@ -117,25 +117,32 @@ def generate(name,title,full=False):
     for index,heading in enumerate(soup.find_all('h2'),1):
         heading['id']='capitulo-'+str(index)
         navigation.append('<li><a href="#'+heading['id']+'">'+html.escape(heading.get_text())+'</a></li>')
-    page='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>'+html.escape(title)+'</title><style>'+HTML_CSS+'</style><main><header><img src="recursos/if-goiano-urutai.png" alt="Instituto Federal Goiano - Campus Urutaí"><p>XIX SEMINFO 2026 | Documentação da organização</p></header><nav aria-label="Índice"><strong>Neste documento</strong><ul>'+''.join(navigation)+'</ul></nav>'+str(soup)+'<footer>Edição de 16/10/2026. Dados ainda não confirmados permanecem pendentes. Nenhuma aprovação é presumida.</footer></main></html>'
+    page='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>'+html.escape(title)+'</title><style>'+HTML_CSS+'main img{max-width:100%;height:auto}.page-break{break-before:page}</style><main><header><img src="recursos/if-goiano-urutai.png" alt="Instituto Federal Goiano - Campus Urutaí"><p>XIX SEMINFO 2026 | Documentação da organização</p></header><nav aria-label="Índice"><strong>Neste documento</strong><ul>'+''.join(navigation)+'</ul></nav>'+str(soup)+'<footer>Edição de 18/10/2026. Capturas reais da mesa; registros virtuais identificados nas legendas. Campos pendentes continuam para decisão da organização.</footer></main></html>'
     (HERE/(name+'.html')).write_text(page,encoding='utf-8')
     story=[]
-    if full:
-        logo=HERE/'recursos/if-goiano-urutai.png'
-        if logo.exists():story += [Image(str(logo),width=99*mm,height=33*mm,hAlign='LEFT'),Spacer(1,26*mm)]
-        story += [Paragraph('XIX SEMINFO 2026',styles['SmallIF']),Spacer(1,5*mm),Paragraph(title,styles['TitleIF']),Paragraph('Caramel Contest<br/>Núcleo de Informática',styles['SubIF']),Spacer(1,8*mm),Paragraph('Evento: <b>29 de outubro de 2026</b><br/>Edição do manual: 16/10/2026',styles['Text']),Spacer(1,16*mm),Paragraph('Coordenação, TI, banca e monitores<br/>Duas bancas independentes, questões e classificações por categoria.',styles['Text']),Spacer(1,15*mm),Paragraph('Este documento orienta a execução. IPs, horários pendentes e resultados de homologação precisam ser confirmados pela instituição.',styles['SmallIF']),PageBreak(),Paragraph('Índice',styles['TitleIF'])]
-        toc=TableOfContents();toc.levelStyles=[styles['TOCIF']];story += [toc,PageBreak()]
     chapter_seen=False
     for element in soup.children:
         if not getattr(element,'name',None):continue
         tag=element.name
         if tag=='h1':
-            if not full:story.append(Paragraph(inline(element),styles['TitleIF']))
+            story.append(Paragraph(inline(element),styles['TitleIF']))
         elif tag=='h2':
             if full and chapter_seen:story.append(PageBreak())
             story.append(Paragraph(inline(element),styles['ChapterIF']));chapter_seen=True
         elif tag=='h3':story.append(Paragraph(inline(element),styles['SubIF']))
-        elif tag=='p':story.append(Paragraph(inline(element),styles['Text']))
+        elif tag=='p':
+            picture=element.find('img')
+            if picture:
+                asset=(HERE/picture['src']).resolve()
+                if not asset.is_relative_to(HERE.resolve()):raise ValueError('Imagem fora da documentação')
+                from PIL import Image as PILImage
+                with PILImage.open(asset) as bitmap:w,h=bitmap.size
+                scale=min(WIDTH/w,96*mm/h)
+                story.append(Image(str(asset),width=w*scale,height=h*scale,hAlign='CENTER'))
+                caption=picture.get('alt','').strip()
+                if caption:story.append(Paragraph(html.escape(caption),styles['SmallIF']))
+                story.append(Spacer(1,2*mm))
+            else:story.append(Paragraph(inline(element),styles['Text']))
         elif tag in ('ol','ul'):
             for i,item in enumerate(element.find_all('li',recursive=False),int(element.get('start',1))):
                 story.append(Paragraph(inline(item),styles['ListIF'],bulletText=str(i)+'.' if tag=='ol' else '-'))
@@ -143,16 +150,8 @@ def generate(name,title,full=False):
         elif tag=='pre':
             code=html.escape(element.get_text().rstrip()).replace('\n','<br/>')
             story.append(Paragraph(code,styles['CodeIF']))
-    if name=='ficha-homologacao':
-        grouped=[];section=[]
-        for flow in story:
-            if isinstance(flow,Paragraph) and flow.style.name=='ChapterIF':
-                if section:grouped.append(KeepTogether(section))
-                section=[flow]
-            elif section:section.append(flow)
-            else:grouped.append(flow)
-        if section:grouped.append(KeepTogether(section))
-        story=grouped
+        elif tag=='div' and 'page-break' in element.get('class',[]):story.append(PageBreak())
+        elif tag=='hr':story.append(HRFlowable(width='100%',thickness=.4,color=colors.HexColor('#9caaa0'),spaceBefore=6*mm,spaceAfter=4*mm))
     OUT.mkdir(parents=True,exist_ok=True)
     target=OUT/(name+'.pdf');doc=ManualDoc(target,title,full)
     doc.multiBuild(story)
@@ -160,6 +159,7 @@ def generate(name,title,full=False):
 
 
 if __name__=='__main__':
-    files=[generate('manual-if','Manual de implantação e operação',True),generate('roteiro-banca','Roteiro da banca e dos monitores'),generate('ficha-homologacao','Ficha de homologação por laboratório')]
-    (HERE/'manifesto-documentacao.json').write_text(json.dumps({'edition':'2026-10-16','event':'2026-10-29','interface':'mantida; prévia descartada excluída','contains_real_credentials':False,'files':files},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    files=[generate('manual-if','Guia visual de configuração e operação',True),generate('roteiro-banca','Roteiro rápido da banca'),generate('ficha-homologacao','Ficha de homologação por laboratório')]
+    screenshots=[{'file':p.relative_to(HERE).as_posix(),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted((HERE/'recursos/telas-2026-10-18').rglob('*')) if p.is_file() and p.suffix in ('.jpg','.png')]
+    (HERE/'manifesto-documentacao.json').write_text(json.dumps({'edition':'2026-10-18','event':'2026-10-29','interface':'Central SEMINFO completa e preparação; BOCA nativo','contains_real_credentials':False,'screenshots':screenshots,'files':files},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print('Gerados três PDFs e três HTMLs a partir das fontes Markdown.')

@@ -1,5 +1,7 @@
 # Situação da implementação — 16/10/2026
 
+> Registro histórico anterior à formatação. Em 17/10/2026, a recuperação começou a partir do Git, sem o ZIP privado: as ISOs, bancos, certificados e relatórios descritos abaixo não estavam disponíveis. Os resultados desta seção não atestam o ambiente reconstruído. Acompanhar a nova execução em [RECUPERACAO-2026-10-17.md](RECUPERACAO-2026-10-17.md).
+
 A implementação de autorização e placares está no projeto e nas duas ISOs. **Ainda não é homologação dos laboratórios.** Para quem operará o evento, o roteiro atual é [guia-organizacao.md](guia-organizacao.md). Procedimentos técnicos: [admissao-e-placares.md](admissao-e-placares.md), [runbook.md](runbook.md) e [VALIDACAO.md](VALIDACAO.md).
 
 ## Entregue

@@ -67,6 +67,55 @@ if ($action === 'prepare') {
 }
 $ct = rows('SELECT * FROM contesttable WHERE contestnumber=$1', [$contest])[0] ?? null;
 if (!$ct) fail('Contest ainda nao preparado');
+if ($action === 'problem-package') {
+    $number=$input['number'] ?? null;
+    if (!is_int($number) || $number<1 || $number>9999) fail('Questao invalida');
+    $p=rows("SELECT problemnumber AS number,problemname AS name,problemfullname AS title,
+        problembasefilename AS basename,probleminputfilehash AS package_hash,
+        problemautojudge AS autojudge,updatetime AS updated_at,probleminputfile AS oid
+        FROM problemtable WHERE contestnumber=$1 AND problemnumber=$2 AND fake=false AND problemfullname !~ '(DEL)'",[$contest,$number])[0] ?? null;
+    if (!$p || !$p['oid']) fail('Questao sem pacote');
+    $raw=scalar('SELECT encode(lo_get($1),\'base64\')',[(int)$p['oid']]);
+    if (strlen($raw)>90*1024*1024) fail('O pacote excede 64 MiB para o ensaio local');
+    unset($p['oid']);
+    foreach (['number','autojudge','updated_at'] as $key) $p[$key]=(int)$p[$key];
+    result(['ok'=>true,'revision_data'=>$p,'package'=>str_replace(["\r","\n"],'',$raw)]);
+}
+if (in_array($action,['reference-seed','reference-results'])) {
+    if (getenv('SEMINFO_REFERENCE') !== '1') fail('Acao exclusiva do BOCA descartavel de ensaio');
+    $_SESSION['usertable']=['username'=>'admin','contestnumber'=>$contest,'usersitenumber'=>$site,'usernumber'=>1000,'usertype'=>'admin'];
+    if ($action==='reference-results') {
+        $runs=rows("SELECT r.runstatus AS status,a.shortname AS verdict,a.yes AS accepted,
+            CASE WHEN r.autostderr IS NOT NULL THEN encode(substring(lo_get(r.autostderr) from 1 for 4000),'base64') ELSE '' END AS detail
+            FROM runtable r JOIN answertable a ON a.contestnumber=r.contestnumber AND a.answernumber=r.runanswer WHERE r.contestnumber=$1 ORDER BY r.runnumber",[$contest]);
+        foreach ($runs as &$run) $run['accepted']=$run['accepted']==='t';
+        result($runs);
+    }
+    $p=$input['problem'] ?? [];
+    $number=$p['number'] ?? 0;
+    if (!is_int($number) || $number<1 || $number>9999) fail('Questao invalida');
+    $package=base64_decode($input['package'] ?? '',true);
+    if ($package===false || strlen($package)>64*1024*1024) fail('Pacote invalido');
+    $path=tempnam('/tmp','reference-'); file_put_contents($path,$package);
+    $saved=DBNewProblem($contest,['number'=>$number,'name'=>$p['name'],'fullname'=>$p['title'],
+        'basename'=>$p['basename'],'inputfilename'=>'reference.zip','inputfilepath'=>$path,'autojudge'=>1023]);
+    unlink($path);
+    if (!$saved) fail('Falha ao importar pacote no ensaio');
+    $sources=$input['sources'] ?? [];
+    if (!is_array($sources) || count($sources)<1 || count($sources)>4) fail('Referencias invalidas');
+    foreach ($sources as $i=>$source) {
+        if (!preg_match('/^[A-Za-z][A-Za-z0-9_-]{0,79}\.(c|cpp|java|py3)$/D',$source['name'] ?? '') ||
+            !in_array($source['lang'] ?? null,[1,2,3,5],true)) fail('Arquivo de referencia invalido');
+        $raw=base64_decode($source['content'] ?? '',true);
+        if ($raw===false || strlen($raw)>131072) fail('Referencia grande demais');
+        $path='/tmp/'.$source['name']; file_put_contents($path,$raw);
+        $saved=DBNewRun(['contest'=>$contest,'site'=>$site,'user'=>2001,'problem'=>$number,
+            'lang'=>$source['lang'],'filename'=>$source['name'],'filepath'=>$path,'runnumber'=>$i+1]);
+        unlink($path);
+        if (!$saved) fail('Falha ao enviar referencia ao juiz de ensaio');
+    }
+    result(['ok'=>true]);
+}
 if ($action === 'verify' || $action === 'activate') {
     $errors = [];
     $teams = (int)scalar("SELECT count(*) FROM usertable WHERE contestnumber=$1 AND usersitenumber=$2 AND usertype='team' AND userenabled", [$contest,$site]);

@@ -23,6 +23,17 @@ require('header.php');
 if(($ct = DBContestInfo($_SESSION["usertable"]["contestnumber"])) == null)
 	ForceLoad("../index.php");
 
+// SEMINFO: problem changes belong to preparation, before any team submission.
+if (count($_POST) || isset($_GET['delete'])) {
+    $guard=DBConnect();
+    $used=pg_query_params($guard,'SELECT count(*) FROM runtable WHERE contestnumber=$1',[$_SESSION['usertable']['contestnumber']]);
+    if ($ct['contestactive']==='t' || !$used || (int)pg_fetch_result($used,0,0)>0) {
+        MSGError('Edicao bloqueada: prova ativa, com submissoes ou banco indisponivel.');
+        ForceLoad('problem.php');
+        exit;
+    }
+}
+
 if (isset($_GET["delete"]) && is_numeric($_GET["delete"]) && isset($_GET["input"])) {
 	$param = array();
 	$param['number']=$_GET["delete"];
@@ -42,6 +53,13 @@ if(isset($_POST['Submit5']) && $_POST['Submit5']=='Send') {
 	   isset($_POST['fullname']) &&
 	   isset($_POST['timelimit']) &&
 	   $_POST["confirmation"] == "confirm") {
+        if (!preg_match('/^[A-Za-z][A-Za-z0-9_]{0,79}$/D',trim($_POST['basename'])) ||
+            !preg_match('/^(?:[1-9][0-9]{0,2})(?:,[1-9][0-9]?)?$/D',trim($_POST['timelimit'])) ||
+            strlen(trim($_POST['fullname']))<1 || strlen($_POST['fullname'])>100 ||
+            preg_match('/[\r\n]/',$_POST['fullname'])) {
+            MSGError('Informe nome, basename Java valido e limite inteiro de 1 a 999 segundos (opcional: ,repeticoes).');
+            ForceLoad('buildproblem.php'); exit;
+        }
 		if ($_FILES["probleminput"]["name"] != "") {
 			$type=myhtmlspecialchars($_FILES["probleminput"]["type"]);
 			$size=myhtmlspecialchars($_FILES["probleminput"]["size"]);
@@ -75,6 +93,13 @@ if(isset($_POST['Submit5']) && $_POST['Submit5']=='Send') {
 				ForceLoad("../index.php");
 			}
 		} else $name2 = "";
+        if ($name2 !== '') {
+            $extension=strtolower(pathinfo($name2,PATHINFO_EXTENSION));
+            if (!in_array($extension,['pdf','txt'])) {
+                MSGError('Use enunciado em PDF ou TXT.'); ForceLoad('buildproblem.php'); exit;
+            }
+            $name2='enunciado.'.$extension;
+        }
 
 		$ds = DIRECTORY_SEPARATOR;
 		if($ds=="") $ds = "/";
@@ -94,9 +119,9 @@ if(isset($_POST['Submit5']) && $_POST['Submit5']=='Send') {
 			@mkdir($dir . $ds . 'output');
 			@mkdir($dir . $ds . 'tests');
 			@mkdir($dir . $ds . 'description');
-			$filea = array('compare' . $ds . 'c','compare' . $ds . 'cc','compare' . $ds . 'java','compare' . $ds . 'py2','compare' . $ds . 'py3',
-						   'compile' . $ds . 'c','compile' . $ds . 'cc','compile' . $ds . 'java','compile' . $ds . 'py2','compile' . $ds . 'py3',
-						   'run' . $ds . 'c','run' . $ds . 'cc','run' . $ds . 'java','run' . $ds . 'py2','run' . $ds . 'py3');
+			$filea = [];
+            foreach (['compare','compile','run'] as $stage)
+                foreach (['c','cpp','java','py3'] as $lang) $filea[]=$stage.$ds.$lang;
 			foreach($filea as $file) {
 				$rfile=$locr . $ds . '..' . $ds . 'doc' . $ds . 'problemexamples' . $ds . 'problemtemplate' . $ds . $file;
 				if(is_readable($rfile)) {
@@ -113,11 +138,10 @@ if(isset($_POST['Submit5']) && $_POST['Submit5']=='Send') {
 			if(!isset($tl[1]) || !is_numeric(trim($tl[1]))) $tl[1]='1';
 			$str = "echo " . trim($tl[0]) . "\necho " . trim($tl[1]) . "\necho 512\necho " . floor(10 + $size1 / 512) . "\nexit 0\n";
 			file_put_contents($dir . $ds . 'limits' . $ds . 'c',$str);
-			file_put_contents($dir . $ds . 'limits' . $ds . 'cc',$str);
+			file_put_contents($dir . $ds . 'limits' . $ds . 'cpp',$str);
 			file_put_contents($dir . $ds . 'limits' . $ds . 'java',$str);
-            file_put_contents($dir . $ds . 'limits' . $ds . 'py2',$str);
             file_put_contents($dir . $ds . 'limits' . $ds . 'py3',$str);
-			$str = "basename=" . trim($_POST['basename']) . "\nfullname=" . trim($_POST['fullname']);
+			$str = "basename=" . trim($_POST['basename']) . "\nfullname=\"" . addcslashes(trim($_POST['fullname']),"\\\"") . "\"";
 			if($name2) {
 				@copy($temp2, $dir . $ds . 'description' . $ds . $name2);
 				@unlink($temp2);

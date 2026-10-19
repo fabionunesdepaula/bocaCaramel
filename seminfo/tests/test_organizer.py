@@ -54,7 +54,8 @@ class OrganizerTests(unittest.TestCase):
         with patch('admission_setup.running', return_value=False), patch.object(organizer,'database_status',return_value={'active':False,'runs':0}):
             for data in (self.config_data() | {'duration_minutes': ''}, self.config_data() | {'freeze_minutes_before_end': '180'}, self.config_data() | {'subnet': ''}):
                 with self.assertRaises(ValueError):self.app.save_config(data)
-            self.app.save_config(self.config_data() | {'profile': 'tii', 'contest_id': 99})
+            with self.assertRaises(ValueError):self.app.save_config(self.config_data() | {'profile': 'tii'})
+            self.app.save_config(self.config_data() | {'contest_id': 99})
             self.assertEqual(kit.config('si')['contest_id'],1)
             self.assertEqual(kit.config('si')['profile'],'si')
             data = self.config_data() | {'server_ip':'','subnet':'','duration_minutes':'','freeze_minutes_before_end':'','timing_confirmed':False}
@@ -62,6 +63,25 @@ class OrganizerTests(unittest.TestCase):
         c=kit.config('si')
         self.assertIsNone(c['server_ip']); self.assertIsNone(c['duration_minutes'])
         self.assertFalse(c['timing_confirmed'])
+
+    def test_category_times_are_editable_without_network_and_do_not_overwrite_other_category(self):
+        other=kit.config('tii')
+        data=self.config_data() | {'profile':'si'}
+        with patch('admission_setup.running',return_value=False), patch.object(organizer,'database_status',return_value={'active':False,'runs':0}):
+            self.app.save_config(data,timing_only=True)
+            c=kit.config('si')
+            self.assertEqual(c['duration_minutes'],180)
+            self.assertEqual(c['freeze_minutes_before_end'],30)
+            self.assertIsNone(c['server_ip'])
+            self.app.save_config({'server_ip':'','subnet':'','control_ips':''})
+            self.assertEqual(kit.config('si')['duration_minutes'],180)
+            self.app.save_config(data | {'freeze_minutes_before_end':'0'},timing_only=True)
+            self.assertEqual(kit.config('si')['freeze_minutes_before_end'],0)
+            before=kit.config('si')
+            for changes in ({'duration_minutes':'0'}, {'freeze_minutes_before_end':'180'}, {'start':'2026-10-29T25:00'}):
+                with self.assertRaises(ValueError):self.app.save_config(data|changes,timing_only=True)
+                self.assertEqual(kit.config('si'),before)
+        self.assertEqual(kit.config('tii'),other)
 
     def test_jobs_cannot_bypass_confirmations_change_room_or_overlap(self):
         for action in organizer.CONFIRM:
@@ -108,8 +128,56 @@ class OrganizerTests(unittest.TestCase):
         app=organizer.Organizer()
         self.assertEqual(app.job['status'],'failed')
 
+    def test_local_preparation_cannot_operate_firewall_activate_or_approve(self):
+        app=organizer.Organizer(preparation_only=True)
+        self.assertNotEqual(app.folder,self.app.folder)
+        self.assertTrue(app.state()['preparation_only'])
+        for action in ('start','stop','activate','install-autostart','pair','open-hub'):
+            with self.assertRaises(ValueError):app.submit(action,{'profile':'si'})
+            with self.assertRaises(ValueError):app.execute(action,'si',{})
+        with patch.object(organizer,'editable') as edit,patch.object(kit,'compose') as compose:
+            app.execute('stop-preparation','si',{})
+            edit.assert_called_once_with('si')
+            compose.assert_called_once_with('si','stop','boca-web','boca-jail')
+
+    def test_preparation_and_full_central_sessions_do_not_overwrite_each_other(self):
+        servers=[];threads=[]
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        try:
+            for app in (self.app,organizer.Organizer(preparation_only=True)):
+                server=Server(('127.0.0.1',0),organizer.Panel,None)
+                server.app,server.token=app,secrets.token_urlsafe(32)
+                thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+                servers.append(server);threads.append(thread)
+                opener.open(f'http://127.0.0.1:{server.server_port}/login?token='+server.token).close()
+            for server in servers:
+                with opener.open(f'http://127.0.0.1:{server.server_port}/api/state') as response:
+                    self.assertEqual(json.load(response)['preparation_only'],server.app.preparation_only)
+            server=servers[-1]
+            with self.assertRaises(urllib.error.HTTPError):opener.open(f'http://127.0.0.1:{server.server_port}/open/hub')
+            with patch.object(organizer,'editable'),patch.object(kit,'exists',return_value=False):
+                with opener.open(f'http://127.0.0.1:{server.server_port}/open/problem-builder') as response:
+                    self.fail('Editor indisponível deveria devolver orientação com erro HTTP')
+        except urllib.error.HTTPError as error:
+            page=error.read().decode()
+            self.assertIn('Voltar à configuração da prova',page)
+            self.assertIn('text/html',error.headers['Content-Type'])
+        finally:
+            for server in servers:server.shutdown();server.server_close()
+            for thread in threads:thread.join()
+
     def test_http_cookie_csrf_origin_host_allowlist_and_no_secrets_in_state(self):
-        server=Server(('127.0.0.1',0),organizer.Panel,None)
+        body_reads=[]
+        class ObservedPanel(organizer.Panel):
+            def body(self, maximum=8192):
+                payload=super().body(maximum)
+                self.body_consumed=True
+                return payload
+            def reply(self, *args, **kwargs):
+                if self.command=='POST':
+                    body_reads.append(getattr(self,'body_consumed',False))
+                return super().reply(*args, **kwargs)
+        server=Server(('127.0.0.1',0),ObservedPanel,None)
         server.app,server.token=self.app,secrets.token_urlsafe(32)
         thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
         base=f'http://127.0.0.1:{server.server_port}'
@@ -125,6 +193,7 @@ class OrganizerTests(unittest.TestCase):
                 self.assertIn("script-src 'self'",response.headers['Content-Security-Policy'])
             for headers in ({}, {'Origin':'https://hostil.example','X-SEMINFO-CSRF':server.token},{'Origin':base,'X-SEMINFO-CSRF':'wrong'},{'Origin':base,'X-SEMINFO-CSRF':server.token,'Host':'hostil.example'}):
                 with self.assertRaises(urllib.error.HTTPError):post({'profile':'tii'},**headers)
+            self.assertEqual(body_reads,[True]*4,'Rejeicoes devem consumir o corpo limitado para entregar o erro HTTP sem reset no Windows')
             with post({'profile':'tii'},Origin=base,**{'X-SEMINFO-CSRF':server.token}):pass
             with opener.open(base+'/api/state') as response:
                 raw=response.read().decode(); state=json.loads(raw)

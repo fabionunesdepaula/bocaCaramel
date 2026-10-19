@@ -35,9 +35,20 @@ require_once("db.php");
 // Allow event administrators to import problems before contest activation.
 // Explicit contest selection is intentionally unavailable to teams/score.
 $seminfoContest = null;
+$seminfoDestination = null;
 if (getenv('SEMINFO_PROFILE') && isset($_GET['contest']) &&
     ctype_digit((string)$_GET['contest']) && (int)$_GET['contest'] > 0) {
     $seminfoContest = (int)$_GET['contest'];
+    $destinations=['builder'=>'admin/buildproblem.php','problems'=>'admin/problem.php'];
+    if (isset($_GET['destination']) && is_string($_GET['destination']) && isset($destinations[$_GET['destination']])) {
+        $seminfoDestination=$destinations[$_GET['destination']];
+    }
+}
+
+if (!isset($_GET['name']) && $seminfoDestination !== null && ValidSession() &&
+    ($_SESSION['usertable']['usertype'] ?? '') === 'admin' &&
+    (int)$_SESSION['usertable']['contestnumber'] === $seminfoContest) {
+    header('Location: '.$seminfoDestination); exit;
 }
 
 if (!isset($_GET["name"])) {
@@ -88,7 +99,7 @@ function computeHASH()
 	passHASH = js_myhash(js_myhash(document.form1.password.value)+'<?php echo session_id(); ?>');
 	document.form1.name.value = '';
 	document.form1.password.value = '                                                                                 ';
-	document.location = 'index.php?name='+userHASH+'&password='+passHASH<?php if ($seminfoContest !== null) echo "+'&contest=" . $seminfoContest . "'"; ?>;
+	document.location = 'index.php?name='+encodeURIComponent(userHASH)+'&password='+passHASH<?php if ($seminfoContest !== null) echo "+'&contest=" . $seminfoContest . "'"; if ($seminfoDestination !== null) echo "+'&destination=" . array_search($seminfoDestination,$destinations,true) . "'"; ?>;
 }
 </script>
 <?php
@@ -103,7 +114,7 @@ if(function_exists("globalconf") && function_exists("sanitizeVariables")) {
 		$usertable = DBLogIn($name, $password);
 	}
 	if(!$usertable) {
-		ForceLoad("index.php");
+		ForceLoad($seminfoDestination !== null ? 'index.php?contest='.$seminfoContest.'&destination='.array_search($seminfoDestination,$destinations,true) : 'index.php');
 	}
 	else {
 		if(($ct = DBContestInfo($_SESSION["usertable"]["contestnumber"])) == null)
@@ -119,7 +130,8 @@ if(function_exists("globalconf") && function_exists("sanitizeVariables")) {
 				exit;
 			}
 			echo "<script language=\"JavaScript\">\n";
-			echo "document.location='" . $_SESSION["usertable"]["usertype"] . "/index.php';\n";
+			$next=($_SESSION['usertable']['usertype']==='admin' && $seminfoDestination!==null) ? $seminfoDestination : $_SESSION['usertable']['usertype'].'/index.php';
+			echo "document.location='" . $next . "';\n";
 			echo "</script>\n";
 		}
 		exit;

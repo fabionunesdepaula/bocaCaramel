@@ -13,4 +13,17 @@ foreach($folder in @([Environment]::GetFolderPath('Desktop'),[Environment]::GetF
         $shortcut.Description='Organizar a maratona, aprovar equipes, projetar placares e fazer backup'
         $shortcut.Save()
     }
+    $pythonExe=(Get-Command python -ErrorAction Stop).Source
+    $pythonExe=(& $pythonExe -c 'import sys; print(sys.executable)').Trim()
+    $pythonHidden=Join-Path (Split-Path $pythonExe -Parent) 'pythonw.exe'
+    $prepTarget=Join-Path $folder 'Configurar Provas SEMINFO.lnk'
+    if($PSCmdlet.ShouldProcess($prepTarget,'Criar atalho da configuracao local de provas')) {
+        if(-not (Test-Path -LiteralPath $pythonHidden)) { throw 'pythonw.exe ausente; confira a instalacao do Python.' }
+        $shortcut=$shell.CreateShortcut($prepTarget)
+        $shortcut.TargetPath=$pythonHidden
+        $shortcut.Arguments='"'+(Join-Path $PSScriptRoot 'organizer.py')+'" --prepare'
+        $shortcut.WorkingDirectory=$PSScriptRoot
+        $shortcut.Description='Definir horarios, criar e importar questoes e testar referencias da categoria'
+        $shortcut.Save()
+    }
 }

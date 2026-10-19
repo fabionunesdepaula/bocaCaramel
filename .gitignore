@@ -25,5 +25,6 @@ seminfo/backups/
 seminfo/dist/
 seminfo/vendor/
 seminfo/reports/
+seminfo/documentacao/output/anteriores/
 **/__pycache__/
 *.pyc
