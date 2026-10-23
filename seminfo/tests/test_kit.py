@@ -69,6 +69,23 @@ class ConfigurationTests(unittest.TestCase):
             control.assert_not_called()
 
 
+class ServerBuildTests(unittest.TestCase):
+    def test_problem_template_tree_changes_server_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);here=root/'seminfo'
+            template=root/'doc/problemexamples/problemtemplate'
+            (template/'compile').mkdir(parents=True)
+            script=template/'compile/java';script.write_bytes(b'first compiler\n')
+            with patch.object(manage,'ROOT',root),patch.object(manage,'HERE',here):
+                first=manage.source_hash()
+                script.write_bytes(b'updated compiler\n')
+                second=manage.source_hash()
+                self.assertNotEqual(first,second)
+                (template/'description').mkdir()
+                (template/'description/problem.info').write_text('basename=A\n')
+                self.assertNotEqual(second,manage.source_hash())
+
+
 class ClientBuildTests(unittest.TestCase):
     def test_ubuntu_boot_without_casper_argument_gets_persistence(self):
         with tempfile.TemporaryDirectory() as tmp:
