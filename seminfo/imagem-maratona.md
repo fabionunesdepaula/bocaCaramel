@@ -17,7 +17,7 @@ python seminfo/manage.py build-client tii
 
 Definir antes os endereços reais em `seminfo/local/PERFIL/lab.json` quando disponíveis. `--allow-incomplete` constrói bloqueada, com janela de solicitação: o IP da banca pode ser informado nela. O certificado da banca já está fixado na imagem; levar a identidade privada correspondente para a mesa final. Não considerar a imagem homologada sem ensaio físico.
 
-O Ubuntu é baixado de `releases.ubuntu.com`, com retomada por ranges e SHA256 publicado pelo Ubuntu. O builder Linux extrai a ISO, instala os pacotes em chroot, aplica o overlay, recompõe squashfs/initramfs e reutiliza o boot híbrido original. A senha de manutenção é convertida para hash; senhas BOCA não são copiadas.
+O Ubuntu é baixado de `releases.ubuntu.com`, com retomada por ranges e SHA256 publicado pelo Ubuntu. O builder Linux extrai a ISO, instala os pacotes em chroot, aplica o overlay, recompõe squashfs/initramfs e reutiliza o boot híbrido original. A senha de manutenção é convertida para hash após normalizar finais de linha LF/CRLF; senhas BOCA não são copiadas.
 
 A construção habilita o componente oficial `universe` e remove `snapd`/`systemd-timesyncd` conforme os conflitos declarados pelos pacotes Maratona Linux. Antes de comprimir o sistema, verifica que a conta `icpc` compila e executa as quatro linguagens sem sudo. O Casper é adaptado para aceitar `home-rw` somente no mesmo dispositivo da mídia de boot; não cria persistência de raiz nem carrega snapshots de outros discos.
 
@@ -26,6 +26,28 @@ O hook de boot remove as concessões de administrador do live CD em sudo/PolicyK
 Saídas: `seminfo/dist/clients/PERFIL/`, com ISO, SHA256, lista de pacotes e manifesto do overlay. A área de trabalho do builder fica no volume `seminfo-client-build` para diagnóstico. Construir uma variante por vez e reservar espaço para a ISO extraída e os pacotes. Após verificar a mídia, remover apenas esse volume se não estiver em uso; não limpar o Docker inteiro.
 
 Para retomar uma construção interrompida, conferir o diretório informado no log e definir temporariamente `$env:SEMINFO_RESUME_WORK='/work/seminfo-build.XXXXXX'` antes de repetir o comando. Após sucesso, a segunda variante reaproveita os pacotes locais da mesma base, aplicando seu próprio banner/configuração e senha de manutenção. Remover `seminfo/dist/client-work.json` se o volume de trabalho for removido.
+
+### Atualizar uma ISO SEMINFO existente
+
+Quando a identidade da banca ou o endereço mudar, gerar novamente o overlay
+com `python seminfo/manage.py client-config tii`. O script
+`client/reconfigure-image.sh` aplica esse overlay a uma ISO SEMINFO da mesma
+categoria, sem baixar pacotes. Executar como root no builder Linux, com volume
+de trabalho em `/work`, os scripts em `/scripts` e os arquivos de entrada
+montados somente para leitura:
+
+```bash
+bash /scripts/reconfigure-image.sh /input/original.iso SHA256_ORIGINAL /out/overlay /out/atualizada.iso /maintenance-password.txt
+```
+
+O destino deve ser novo. O script confere o SHA-256 da origem, atualiza o
+cliente e a senha de manutenção, testa os compiladores, recompõe o initramfs
+e preserva o boot híbrido BIOS/UEFI. Não copiar credenciais BOCA ou a chave
+privada da banca. Registrar o SHA-256 final e o pin público no `image.json`.
+Conferir a ISO publicada com `tests/inspect_admission_images.py --profile tii
+--iso /caminho/atualizada.iso --report /reports/tii-iso-inspection.json`, em
+Linux com xorriso, squashfs-tools e unmkinitramfs. A inspeção estática exige
+complemento por boot, aprovação e reinicialização em uma máquina do laboratório.
 
 ## Gravação em Linux
 

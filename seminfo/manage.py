@@ -25,11 +25,13 @@ CHECKS = ('client_boot', 'client_persistence', 'network_isolation', 'projector',
 BASES = {'web': 'ghcr.io/joaofazolo/boca-docker/boca-web:latest',
          'jail': 'ghcr.io/joaofazolo/boca-docker/boca-jail:latest',
          'db': 'postgres:14-alpine', 'grafana': 'grafana/grafana:latest'}
+HIDDEN_PROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
 
 
 def run(args, *, data=None, timeout=600, capture=True):
     p = subprocess.run([str(a) for a in args], input=data, stdout=subprocess.PIPE if capture else None,
-                       stderr=subprocess.PIPE if capture else None, timeout=timeout)
+                       stderr=subprocess.PIPE if capture else None, timeout=timeout,
+                       creationflags=HIDDEN_PROCESS_FLAGS if capture else 0)
     if p.returncode:
         # Error output can contain SQL, connection strings or environment values.
         detail = (p.stderr or b'').decode('utf-8', 'replace')[-2000:]
@@ -199,7 +201,8 @@ def inspect(target):
 
 
 def exists(target):
-    return subprocess.run(['docker', 'inspect', target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return subprocess.run(['docker', 'inspect', target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          creationflags=HIDDEN_PROCESS_FLAGS).returncode == 0
 
 
 def fingerprint(container):
@@ -259,7 +262,8 @@ def sql(container, text, database='postgres'):
 
 def wait_database(container):
     for _ in range(60):
-        p = subprocess.run(['docker', 'exec', container, 'pg_isready', '-U', 'postgres'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.run(['docker', 'exec', container, 'pg_isready', '-U', 'postgres'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, creationflags=HIDDEN_PROCESS_FLAGS)
         if p.returncode == 0:
             return
         time.sleep(1)
@@ -299,13 +303,16 @@ def check_restore(folder):
                    'verified_utc': dt.datetime.now(dt.timezone.utc).isoformat()})
         print('Restauracao isolada aprovada: todas as tabelas e large objects conferem.')
     finally:
-        subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(['docker', 'volume', 'rm', volume], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=HIDDEN_PROCESS_FLAGS)
+        subprocess.run(['docker', 'volume', 'rm', volume], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=HIDDEN_PROCESS_FLAGS)
 
 
 def source_hash():
     h = hashlib.sha256()
-    for folder in (ROOT / 'src', ROOT / 'tools', HERE / 'server'):
+    for folder in (ROOT / 'src', ROOT / 'tools', HERE / 'server',
+                   ROOT / 'doc/problemexamples/problemtemplate'):
         for p in sorted(folder.rglob('*')):
             if p.is_file():
                 h.update(str(p.relative_to(ROOT)).replace('\\', '/').encode())
