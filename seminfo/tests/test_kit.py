@@ -49,7 +49,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertNotIn('ip6 daddr',text)
             self.assertNotIn('ct state established,related accept',text.split('chain output')[1])
             self.assertFalse(any('credentials' in str(p) for p in overlay.rglob('*')))
-            self.assertEqual((overlay/'usr/share/maratona-background/maratona-common-wallpaper.png').read_bytes(),(HERE/'banners/lab3-si.png').read_bytes())
+            self.assertEqual((overlay/'usr/share/maratona-background/maratona-common-wallpaper.png').read_bytes(),(HERE/'banners/caramel-espresso.png').read_bytes())
 
     def test_incomplete_overlay_is_closed(self):
         c=config();c['server_ip']=None;c['subnet']=None

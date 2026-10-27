@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -17,6 +18,7 @@ import warnings
 
 HERE = Path(__file__).resolve().parents[1]
 LABS = {'si': 3, 'tii': 4}
+WALLPAPERS = {'si': 'caramel-espresso.png', 'tii': 'caramel-claro.png'}
 # Public package test/example keys, verified byte for byte against upstream
 # release files and the installed packages' dpkg md5sums. An entire directory
 # or package is never exempt: both the exact path and SHA256 must match.
@@ -67,9 +69,21 @@ def extract_iso(iso, source, destination):
 
 def sha256_file(path):
     digest = hashlib.sha256()
+    advise = getattr(os, 'posix_fadvise', None)
+    discard_hint = getattr(os, 'POSIX_FADV_DONTNEED', None)
+    offset = 0
     with path.open('rb') as stream:
         while data := stream.read(8 * 1024 * 1024):
             digest.update(data)
+            # Large ISOs need not remain in the Linux page cache after hashing;
+            # retaining them can make the subsequent Windows export thrash.
+            if advise is not None and discard_hint is not None:
+                try:
+                    advise(stream.fileno(), offset, len(data), discard_hint)
+                except OSError:
+                    # Advisory cache management is optional on other filesystems.
+                    advise = None
+            offset += len(data)
     return digest.hexdigest()
 
 
@@ -86,7 +100,7 @@ def squashfs_entries(fs):
     return entries
 
 
-def inspect_accounts(read, entries, private, limitations):
+def inspect_accounts(read, entries, private, limitations, reference=None):
     passwd = {row.split(':')[0]: row.split(':') for row in read('etc/passwd').decode().splitlines()}
     shadow = {row.split(':')[0]: row.split(':') for row in read('etc/shadow').decode().splitlines()}
     groups = [row.split(':') for row in read('etc/group').decode().splitlines()]
@@ -108,6 +122,14 @@ def inspect_accounts(read, entries, private, limitations):
             if set(text.split(None, 1)[0].split(',')) & subjects:
                 require(text == 'icpc ALL=(ALL:ALL) !ALL', 'Possivel concessao sudo para icpc em ' + path)
     require('seminfo-admin' in passwd and 'seminfo-admin' in shadow, 'Conta de manutencao ausente')
+    if reference is not None:
+        # The reference contains a digest of the original password hash, never
+        # the password itself. Match only shadow's password field (column 2),
+        # independently of password-age timestamps.
+        stored_digest = hashlib.sha256(shadow['seminfo-admin'][1].encode()).hexdigest()
+        require(hmac.compare_digest(stored_digest, reference['maintenance_shadow_sha256']),
+                'Hash da senha de manutencao mudou em relacao a ISO de origem')
+        return None
     password_file = private / 'maintenance-password.txt'
     maintenance_verified = False
     if password_file.is_file():
@@ -269,11 +291,33 @@ def inspect_boot(iso, work, read, limitations):
     return initrd_verified, catalog_path, catalog_checksum, image_checksums
 
 
-def inspect(profile, iso):
+def load_reference(path, profile):
+    reference = json.loads(path.read_text(encoding='utf-8-sig'))
+    require(isinstance(reference, dict) and isinstance(reference.get('config'), dict),
+            'Referencia deve conter config extraida da ISO de origem')
+    config = reference['config']
+    require(config.get('profile') == profile and config.get('lab') == LABS[profile]
+            and config.get('admission') is True, 'Perfil da referencia incorreto')
+    for name in ('source_sha256', 'maintenance_shadow_sha256'):
+        require(isinstance(reference.get(name), str) and
+                re.fullmatch(r'[0-9a-f]{64}', reference[name]) is not None,
+                'Digest de referencia ausente/invalido: ' + name)
+    require(isinstance(config.get('admission_fingerprint'), str) and
+            re.fullmatch(r'[0-9a-f]{64}', config['admission_fingerprint']) is not None,
+            'Pin de referencia ausente/invalido')
+    require(all(key in config for key in ('server_ip', 'subnet')),
+            'Referencia deve informar IP/rede, inclusive null quando nao configurados')
+    return reference
+
+
+def inspect(profile, iso, reference_image_json=None):
     original_stat = iso.stat()
     lab = LABS[profile]
     private = HERE / 'local' / profile
-    local = json.loads((private / 'lab.json').read_text(encoding='utf-8-sig'))
+    reference = load_reference(reference_image_json, profile) if reference_image_json else None
+    local = reference['config'] if reference else json.loads((private / 'lab.json').read_text(encoding='utf-8-sig'))
+    pin = local['admission_fingerprint'] if reference else hashlib.sha256(
+        ssl.PEM_cert_to_DER_cert((private / 'admission-cert.pem').read_text())).hexdigest()
     limitations = []
     with tempfile.TemporaryDirectory(prefix='seminfo-inspect-') as tmp:
         work = Path(tmp)
@@ -285,11 +329,15 @@ def inspect(profile, iso):
             return command(['unsquashfs', '-cat', str(fs), name])
 
         config = json.loads(read('etc/seminfo/lab.json'))
-        pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert((private / 'admission-cert.pem').read_text())).hexdigest()
         require(config.get('profile') == profile and config.get('lab') == lab and config.get('admission') is True,
                 'Perfil/laboratorio/admissao incorreto')
-        require(config.get('admission_fingerprint') == pin, 'Certificado da ISO difere da banca local')
-        require(all(config.get(key) == local[key] for key in ('server_ip', 'subnet')), 'IP/rede da ISO difere da banca local')
+        require(config.get('admission_fingerprint') == pin, 'Certificado da ISO difere da referencia de identidade')
+        require(all(config.get(key) == local[key] for key in ('server_ip', 'subnet')),
+                'IP/rede da ISO difere da referencia de identidade')
+        if reference:
+            require({key: value for key, value in config.items() if key != 'wallpaper'} ==
+                    {key: value for key, value in local.items() if key != 'wallpaper'},
+                    'Configuracao original mudou alem do wallpaper')
         bootstrap = read('etc/nftables.conf').decode()
         require('tcp dport 8000' not in bootstrap, 'BOCA liberado antes da aprovacao')
         import sys
@@ -310,10 +358,22 @@ def inspect(profile, iso):
                                ('client/seminfo-wallpaper.service', 'etc/systemd/system/seminfo-wallpaper.service')]:
             require(read(target) == (HERE / source).read_bytes(), 'Cliente desatualizado: ' + target)
         assets = {}
+        selected_wallpaper = WALLPAPERS[profile]
+        require(config.get('wallpaper') == selected_wallpaper,
+                'Wallpaper configurado nao corresponde ao perfil: ' + selected_wallpaper)
         for name in ('caramel-claro.png', 'caramel-espresso.png'):
             actual = read('usr/share/maratona-background/' + name)
             require(actual == (HERE / 'banners' / name).read_bytes(), 'Arte alterada: ' + name)
             assets[name] = hashlib.sha256(actual).hexdigest()
+        require(read('usr/share/maratona-background/maratona-common-wallpaper.png') ==
+                (HERE / 'banners' / selected_wallpaper).read_bytes(),
+                'Alias do wallpaper nao tem os mesmos bytes da arte selecionada')
+        dconf = read('etc/dconf/db/local.d/99-seminfo').decode()
+        alias_uri = 'file:///usr/share/maratona-background/maratona-common-wallpaper.png'
+        for key in ('picture-uri', 'picture-uri-dark'):
+            require(re.search(r'^' + re.escape(key) + '=' + re.escape(repr(alias_uri)) + r'$',
+                              dconf, flags=re.M) is not None,
+                    'Preferencia GNOME nao usa o alias fixo: ' + key)
         entries = squashfs_entries(fs)
         for name in ('seminfo-admission-agent', 'seminfo-admission-window', 'seminfo-network',
                      'seminfo-configure', 'seminfo-verify', 'seminfo-wallpaper'):
@@ -322,7 +382,7 @@ def inspect(profile, iso):
         for path in ('etc', 'etc/seminfo', 'etc/systemd/system', 'usr/local/sbin', 'usr/local/lib/seminfo'):
             require(entries.get(path) == ('drwxr-xr-x', 'root/root'), 'Diretorio do cliente sem protecao: ' + path)
         public_fixtures = inspect_secrets(read, entries)
-        maintenance_verified = inspect_accounts(read, entries, private, limitations)
+        maintenance_verified = inspect_accounts(read, entries, private, limitations, reference)
         initrd_verified, catalog_path, catalog_checksum, image_checksums = inspect_boot(iso, work, read, limitations)
         inspect_md5_manifest(tree)
         iso_sha256 = sha256_file(iso)
@@ -331,13 +391,21 @@ def inspect(profile, iso):
                 (final_stat.st_ino, final_stat.st_size, final_stat.st_mtime_ns),
                 'ISO alterada durante a inspecao; execute novamente sobre arquivo estavel')
         return {'passed': True, 'profile': profile, 'lab': lab, 'iso': str(iso), 'sha256': iso_sha256,
-                'pin_matches_desk': True, 'network_matches_desk': True, 'bootstrap_closed': True,
+                'pin_matches_desk': None if reference else True,
+                'network_matches_desk': None if reference else True, 'bootstrap_closed': True,
+                'identity_reference': {'type': 'source_iso' if reference else 'local_desk',
+                                       'source_sha256': reference['source_sha256'] if reference else None},
+                'pin_matches_reference': True, 'network_matches_reference': True,
+                'original_config_preserved_except_wallpaper': True if reference else None,
                 'executables_root_755': True, 'runtime_matches_source': True, 'wallpapers': assets,
+                'fixed_wallpaper': selected_wallpaper, 'wallpaper_alias_matches_selected': True,
+                'gnome_light_dark_use_fixed_alias': True,
                 'no_desk_private_artifacts': True, 'no_unrecognized_private_keys': True,
                 'public_private_key_fixtures': public_fixtures,
                 'private_key_scan_scope': ['*.pem', '*.key', 'etc/seminfo/', 'root/', 'home/'],
                 'icpc_unprivileged': True, 'root_password_locked': True,
                 'maintenance_password_matches': maintenance_verified,
+                'maintenance_password_hash_preserved': True if reference else None,
                 'hybrid_bios_uefi_structure': True, 'persistence_static_policy': True,
                 'boot_catalog_path': catalog_path, 'boot_catalog_md5': catalog_checksum,
                 'boot_images_md5': image_checksums, 'full_md5_manifest_verified': True,
@@ -349,10 +417,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', choices=LABS, help='Inspecionar apenas este perfil (padrao: si e tii)')
     parser.add_argument('--iso', type=Path, help='ISO externa; exige --profile')
+    parser.add_argument('--reference-image-json', type=Path,
+                        help='Identidade extraida da ISO de origem: source_sha256, config e '
+                             'maintenance_shadow_sha256 (SHA256 do campo de senha shadow); exige --profile')
     parser.add_argument('--report', type=Path, default=Path('/reports/iso-admission-inspection.json'))
     args = parser.parse_args()
     if args.iso and not args.profile:
         parser.error('--iso exige --profile')
+    if args.reference_image_json and not args.profile:
+        parser.error('--reference-image-json exige --profile')
     profiles = [args.profile] if args.profile else list(LABS)
     results = {}
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -360,7 +433,7 @@ def main():
         iso = args.iso or HERE / 'dist/clients' / profile / f'ml-seminfo-lab{LABS[profile]}-{profile}.iso'
         try:
             require(iso.is_file(), 'ISO nao encontrada: ' + str(iso))
-            results[profile] = inspect(profile, iso.resolve())
+            results[profile] = inspect(profile, iso.resolve(), args.reference_image_json)
         except Exception as exc:
             # A failed recheck must replace any earlier success report.
             results[profile] = {'passed': False, 'profile': profile, 'iso': str(iso), 'error': str(exc)}

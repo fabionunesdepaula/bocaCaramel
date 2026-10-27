@@ -175,8 +175,8 @@ def main(profile='si'):
         envdir.cleanup()
         for name in names.values():
             subprocess=__import__('subprocess')
-            subprocess.run(['docker','rm','-f','-v',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=kit.HIDDEN_PROCESS_FLAGS)
-        __import__('subprocess').run(['docker','network','rm',network],stdout=__import__('subprocess').DEVNULL,stderr=__import__('subprocess').DEVNULL,creationflags=kit.HIDDEN_PROCESS_FLAGS)
+            subprocess.run(['docker','rm','-f','-v',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,**kit.hidden_process_options())
+        __import__('subprocess').run(['docker','network','rm',network],stdout=__import__('subprocess').DEVNULL,stderr=__import__('subprocess').DEVNULL,**kit.hidden_process_options())
 
 
 if __name__=='__main__':

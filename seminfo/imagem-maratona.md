@@ -2,7 +2,7 @@
 
 Base escolhida: Ubuntu 22.04.5 Desktop amd64 com `maratona-desktop` do PPA estável oficial. Todo o sistema, linguagens e editores ficam no USB; boot e prova não dependem dos serviços centrais nem dos discos internos. A antiga Debian não é usada.
 
-Os fundos atuais são os PNGs fornecidos pelo usuário: `banners/caramel-claro.png` e `banners/caramel-espresso.png`, 2560×1440. A imagem sorteia uma das duas uma vez por boot e mantém a escolha pela sessão inteira, sem carrossel. Os banners anteriores foram preservados como histórico. Ver [admissao-e-placares.md](admissao-e-placares.md).
+Os fundos atuais são os PNGs fornecidos pelo usuário: `banners/caramel-claro.png` e `banners/caramel-espresso.png`. A categoria TII usa sempre o claro, com a etiqueta JUNIOR; SI usa sempre o espresso, com a etiqueta PLENO. O perfil em `/etc/seminfo/lab.json` determina o fundo em cada boot, sem sorteio ou alternância durante a sessão. Os banners anteriores foram preservados como histórico. Ver [admissao-e-placares.md](admissao-e-placares.md).
 
 ## Construção
 
@@ -75,7 +75,7 @@ mkdir -p ~/trabalhos
 printf 'persistencia-ok\n' > ~/trabalhos/ensaio.txt
 ```
 
-O enquadramento padrão `scaled` mantém a arte completa também em telas 4:3. Conferir imagem escolhida e ausência de alternância durante a sessão.
+O enquadramento padrão `scaled` mantém a arte completa também em telas 4:3. Conferir claro/JUNIOR na TII e espresso/PLENO na SI, inclusive após reiniciar, e ausência de alternância durante a sessão.
 
 O verificador compila/executa C, C++20, Java 17 e Python 3, exige autorização válida, acessa o BOCA e testa bloqueio externo. Reiniciar e conferir arquivo, fundo e regras; solicitar nova aprovação e testar outro BOCA e PC vizinho. Falha na persistência impede a homologação e replicação. `image.json` distingue ISO gerada de boot e USB efetivamente verificados.
 
